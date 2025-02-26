@@ -425,6 +425,7 @@ bool RegAllocFast::mayLiveIn(Register VirtReg) {
   return false;
 }
 
+#include "llvm/Support/ZebraProperties.h"
 /// Insert spill instruction for \p AssignedReg before \p Before. Update
 /// DBG_VALUEs with \p VirtReg operands with the stack slot.
 void RegAllocFast::spill(MachineBasicBlock::iterator Before, Register VirtReg,
@@ -437,6 +438,13 @@ void RegAllocFast::spill(MachineBasicBlock::iterator Before, Register VirtReg,
   const TargetRegisterClass &RC = *MRI->getRegClass(VirtReg);
   TII->storeRegToStackSlot(*MBB, Before, AssignedReg, Kill, FI, &RC, TRI,
                            VirtReg);
+  const Attribute &FZAttr = MBB->getParent()->getFunction().getFnAttribute(Attribute::Zebra);
+  bool IsZebraCopy = FZAttr.getKindAsEnum() == Attribute::Zebra &&
+                     (FZAttr.getZebraProperties().getState() == ZebraProperties::Copy
+                      || FZAttr.getZebraProperties().getState() == ZebraProperties::CopyRewritten);
+  if (IsZebraCopy) {
+    dbgs() << "[ZEBRA LLVM-RegA] Spilling register " << printReg(AssignedReg, TRI, 0, MRI) << " to stack in function " << MBB->getParent()->getName() << "\n";
+  }
   ++NumStores;
 
   MachineBasicBlock::iterator FirstTerm = MBB->getFirstTerminator();

@@ -8,6 +8,8 @@
 //
 // This file defines the RABasic function pass, which provides a minimal
 // implementation of the basic register allocator.
+// Contains code from Matthias Braun as mentioned here:
+// https://discourse.llvm.org/t/rfc-spill2reg-selectively-replace-spills-to-stack-with-spills-to-vector-registers/59630/15
 //
 //===----------------------------------------------------------------------===//
 
@@ -318,7 +320,7 @@ bool RABasic::runOnMachineFunction(MachineFunction &mf) {
                       getAnalysis<MachineBlockFrequencyInfo>());
   VRAI.calculateSpillWeightsAndHints();
 
-  SpillerInstance.reset(createInlineSpiller(*this, *MF, *VRM, VRAI));
+  SpillerInstance.reset(createInlineSpiller(*this, *MF, *VRM, RegClassInfo, *Matrix, VRAI));
 
   allocatePhysRegs();
   postOptimization();

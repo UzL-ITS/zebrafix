@@ -3,6 +3,8 @@
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+// Contains code from Matthias Braun as mentioned here:
+// https://discourse.llvm.org/t/rfc-spill2reg-selectively-replace-spills-to-stack-with-spills-to-vector-registers/59630/15
 //
 //===----------------------------------------------------------------------===//
 
@@ -12,8 +14,10 @@
 namespace llvm {
 
 class LiveRangeEdit;
+class LiveRegMatrix;
 class MachineFunction;
 class MachineFunctionPass;
+class RegisterClassInfo;
 class VirtRegMap;
 class VirtRegAuxInfo;
 
@@ -36,7 +40,8 @@ public:
 /// Create and return a spiller that will insert spill code directly instead
 /// of deferring though VirtRegMap.
 Spiller *createInlineSpiller(MachineFunctionPass &Pass, MachineFunction &MF,
-                             VirtRegMap &VRM, VirtRegAuxInfo &VRAI);
+                             VirtRegMap &VRM, const RegisterClassInfo &RegClassInfo,
+                             LiveRegMatrix &Matrix, VirtRegAuxInfo &VRAI);
 
 } // end namespace llvm
 

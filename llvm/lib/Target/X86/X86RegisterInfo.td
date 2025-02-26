@@ -9,6 +9,8 @@
 // This file describes the X86 Register file, defining the registers themselves,
 // aliases between the registers, and the register classes built out of the
 // registers.
+// Contains code from Matthias Braun as mentioned here:
+// https://discourse.llvm.org/t/rfc-spill2reg-selectively-replace-spills-to-stack-with-spills-to-vector-registers/59630/15
 //
 //===----------------------------------------------------------------------===//
 
@@ -530,11 +532,17 @@ def GR32_DIBP : RegisterClass<"X86", [i32], 32, (add EDI, EBP)>;
 def GR32_BPSP : RegisterClass<"X86", [i32], 32, (add EBP, ESP)>;
 
 // Scalar SSE2 floating point registers.
-def FR32 : RegisterClass<"X86", [f32], 32, (sequence "XMM%u", 0, 15)>;
+def FR32 : RegisterClass<"X86", [f32], 32, (sequence "XMM%u", 0, 15)> {
+  let AllocationPriority = 10;
+}
 
-def FR64 : RegisterClass<"X86", [f64], 64, (add FR32)>;
+def FR64 : RegisterClass<"X86", [f64], 64, (add FR32)> {
+  let AllocationPriority = 10;
+}
 
-def FR16 : RegisterClass<"X86", [f16], 16, (add FR32)> {let Size = 32;}
+def FR16 : RegisterClass<"X86", [f16], 16, (add FR32)> {
+    let AllocationPriority = 10;
+}
 
 
 // FIXME: This sets up the floating point register files as though they are f64
@@ -565,11 +573,17 @@ def RSTi : RegisterOperand<RST, "printSTiRegOperand">;
 
 // Generic vector registers: VR64 and VR128.
 // Ensure that float types are declared first - only float is legal on SSE1.
-def VR64: RegisterClass<"X86", [x86mmx], 64, (sequence "MM%u", 0, 7)>;
+def VR64: RegisterClass<"X86", [x86mmx], 64, (sequence "MM%u", 0, 7)> {
+  let AllocationPriority = 10;
+}
 def VR128 : RegisterClass<"X86", [v4f32, v2f64, v8f16, v8bf16, v16i8, v8i16, v4i32, v2i64, f128],
-                          128, (add FR32)>;
+                          128, (add FR32)> {
+  let AllocationPriority = 10;
+}
 def VR256 : RegisterClass<"X86", [v8f32, v4f64, v16f16, v16bf16, v32i8, v16i16, v8i32, v4i64],
-                          256, (sequence "YMM%u", 0, 15)>;
+                          256, (sequence "YMM%u", 0, 15)> {
+  let AllocationPriority = 10;
+}
 
 // Status flags registers.
 def CCR : RegisterClass<"X86", [i32], 32, (add EFLAGS)> {
@@ -587,24 +601,38 @@ def DFCCR : RegisterClass<"X86", [i32], 32, (add DF)> {
 
 // AVX-512 vector/mask registers.
 def VR512 : RegisterClass<"X86", [v16f32, v8f64, v32f16, v32bf16, v64i8, v32i16, v16i32, v8i64],
-                          512, (sequence "ZMM%u", 0, 31)>;
+                          512, (sequence "ZMM%u", 0, 31)> {
+  let AllocationPriority = 10;
+}
 
 // Represents the lower 16 registers that have VEX/legacy encodable subregs.
 def VR512_0_15 : RegisterClass<"X86", [v16f32, v8f64, v64i8, v32i16, v16i32, v8i64],
-                               512, (sequence "ZMM%u", 0, 15)>;
+                               512, (sequence "ZMM%u", 0, 15)> {
+  let AllocationPriority = 10;
+}
 
 // Scalar AVX-512 floating point registers.
-def FR32X : RegisterClass<"X86", [f32], 32, (sequence "XMM%u", 0, 31)>;
+def FR32X : RegisterClass<"X86", [f32], 32, (sequence "XMM%u", 0, 31)> {
+  let AllocationPriority = 10;
+}
 
-def FR64X : RegisterClass<"X86", [f64], 64, (add FR32X)>;
+def FR64X : RegisterClass<"X86", [f64], 64, (add FR32X)> {
+  let AllocationPriority = 10;
+}
 
-def FR16X : RegisterClass<"X86", [f16], 16, (add FR32X)> {let Size = 32;}
+def FR16X : RegisterClass<"X86", [f16], 16, (add FR32X)> {
+  let AllocationPriority = 10;
+}
 
 // Extended VR128 and VR256 for AVX-512 instructions
 def VR128X : RegisterClass<"X86", [v4f32, v2f64, v8f16, v8bf16, v16i8, v8i16, v4i32, v2i64, f128],
-                           128, (add FR32X)>;
+                           128, (add FR32X)> {
+  let AllocationPriority = 10;
+}
 def VR256X : RegisterClass<"X86", [v8f32, v4f64, v16f16, v16bf16, v32i8, v16i16, v8i32, v4i64],
-                           256, (sequence "YMM%u", 0, 31)>;
+                           256, (sequence "YMM%u", 0, 31)> {
+  let AllocationPriority = 10;
+}
 
 // Mask registers
 def VK1     : RegisterClass<"X86", [v1i1],  16,  (sequence "K%u", 0, 7)> {let Size = 16;}

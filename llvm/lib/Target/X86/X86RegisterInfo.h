@@ -7,6 +7,8 @@
 //===----------------------------------------------------------------------===//
 //
 // This file contains the X86 implementation of the TargetRegisterInfo class.
+// Contains code from Matthias Braun as mentioned here:
+// https://discourse.llvm.org/t/rfc-spill2reg-selectively-replace-spills-to-stack-with-spills-to-vector-registers/59630/15
 //
 //===----------------------------------------------------------------------===//
 
@@ -47,6 +49,8 @@ private:
   /// frames. I.e., when we need a 3rd base, not just SP and FP, due to
   /// variable size stack objects.
   unsigned BasePtr;
+
+  bool SpillToSSE = true;
 
 public:
   explicit X86RegisterInfo(const Triple &TT);
@@ -156,11 +160,14 @@ public:
   Register getFramePtr() const { return FramePtr; }
   // FIXME: Move to FrameInfok
   unsigned getSlotSize() const { return SlotSize; }
+  bool getSpillToSSE() const { return SpillToSSE; }
 
   bool getRegAllocationHints(Register VirtReg, ArrayRef<MCPhysReg> Order,
                              SmallVectorImpl<MCPhysReg> &Hints,
                              const MachineFunction &MF, const VirtRegMap *VRM,
                              const LiveRegMatrix *Matrix) const override;
+
+  virtual const TargetRegisterClass* spillToOtherClass(const MachineRegisterInfo& MRI, Register Reg) const override;
 };
 
 } // End llvm namespace

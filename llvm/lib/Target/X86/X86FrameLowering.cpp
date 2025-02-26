@@ -7,6 +7,8 @@
 //===----------------------------------------------------------------------===//
 //
 // This file contains the X86 implementation of TargetFrameLowering class.
+// Contains code from Matthias Braun as mentioned here:
+// https://discourse.llvm.org/t/rfc-spill2reg-selectively-replace-spills-to-stack-with-spills-to-vector-registers/59630/15
 //
 //===----------------------------------------------------------------------===//
 
@@ -482,6 +484,9 @@ void X86FrameLowering::emitCalleeSavedFrameMoves(
 
   // Calculate offsets.
   for (const CalleeSavedInfo &I : CSI) {
+    // TODO
+    if (I.isSpilledToReg())
+      continue;
     int64_t Offset = MFI.getObjectOffset(I.getFrameIdx());
     Register Reg = I.getReg();
     unsigned DwarfReg = MRI->getDwarfRegNum(Reg, true);
@@ -1771,33 +1776,36 @@ void X86FrameLowering::emitPrologue(MachineFunction &MF,
   if (IsFunclet)
     NumBytes = getWinEHFuncletFrameSize(MF);
 
-  // Skip the callee-saved push instructions.
+  // Skip the callee-saved push and copy instructions.
   bool PushedRegs = false;
   int StackOffset = 2 * stackGrowth;
 
-  while (MBBI != MBB.end() &&
-         MBBI->getFlag(MachineInstr::FrameSetup) &&
-         (MBBI->getOpcode() == X86::PUSH32r ||
-          MBBI->getOpcode() == X86::PUSH64r)) {
+  while (MBBI != MBB.end() && MBBI->getFlag(MachineInstr::FrameSetup)) {
+    unsigned Opcode = MBBI->getOpcode();
+    if (Opcode != X86::PUSH32r && Opcode != X86::PUSH64r && Opcode != TargetOpcode::COPY) {
+      break;
+    }
     PushedRegs = true;
     Register Reg = MBBI->getOperand(0).getReg();
     ++MBBI;
 
-    if (!HasFP && NeedsDwarfCFI) {
-      // Mark callee-saved push instruction.
-      // Define the current CFA rule to use the provided offset.
-      assert(StackSize);
-      BuildCFI(MBB, MBBI, DL,
-               MCCFIInstruction::cfiDefCfaOffset(nullptr, -StackOffset),
-               MachineInstr::FrameSetup);
-      StackOffset += stackGrowth;
-    }
+    if (Opcode != TargetOpcode::COPY) {
+      if (!HasFP && NeedsDwarfCFI) {
+        // Mark callee-saved push instruction.
+        // Define the current CFA rule to use the provided offset.
+        assert(StackSize);
+        BuildCFI(MBB, MBBI, DL,
+                 MCCFIInstruction::cfiDefCfaOffset(nullptr, -StackOffset),
+                 MachineInstr::FrameSetup);
+        StackOffset += stackGrowth;
+      }
 
-    if (NeedsWinCFI) {
-      HasWinCFI = true;
-      BuildMI(MBB, MBBI, DL, TII.get(X86::SEH_PushReg))
-          .addImm(Reg)
-          .setMIFlag(MachineInstr::FrameSetup);
+      if (NeedsWinCFI) {
+        HasWinCFI = true;
+        BuildMI(MBB, MBBI, DL, TII.get(X86::SEH_PushReg))
+            .addImm(Reg)
+            .setMIFlag(MachineInstr::FrameSetup);
+      }
     }
   }
 
@@ -2278,7 +2286,8 @@ void X86FrameLowering::emitEpilogue(MachineFunction &MF,
       if ((Opc != X86::POP32r || !PI->getFlag(MachineInstr::FrameDestroy)) &&
           (Opc != X86::POP64r || !PI->getFlag(MachineInstr::FrameDestroy)) &&
           (Opc != X86::BTR64ri8 || !PI->getFlag(MachineInstr::FrameDestroy)) &&
-          (Opc != X86::ADD64ri8 || !PI->getFlag(MachineInstr::FrameDestroy)))
+          (Opc != X86::ADD64ri8 || !PI->getFlag(MachineInstr::FrameDestroy)) &&
+          (Opc != TargetOpcode::COPY || !PI->getFlag(MachineInstr::FrameDestroy)))
         break;
       FirstCSPop = PI;
     }
@@ -2644,12 +2653,38 @@ bool X86FrameLowering::assignCalleeSavedSpillSlots(
     }
   }
 
+  unsigned lastUsedXmm = 0;
+
   // Assign slots for GPRs. It increases frame size.
   for (CalleeSavedInfo &I : llvm::reverse(CSI)) {
     Register Reg = I.getReg();
 
     if (!X86::GR64RegClass.contains(Reg) && !X86::GR32RegClass.contains(Reg))
       continue;
+
+    if (this->TRI->getSpillToSSE()) {
+      // Try to spill to XMM register.
+      if (Reg != X86::RBP && X86::GR64RegClass.contains(Reg) && !MF.callsUnwindInit()) {
+        const MachineRegisterInfo &MRI = MF.getRegInfo();
+        MCRegister SpillReg = MCRegister::NoRegister;
+        for (unsigned NumRegs = X86::FR64RegClass.getNumRegs();
+             lastUsedXmm < NumRegs - 2; lastUsedXmm++) {
+          MCRegister Candidate = X86::FR64RegClass.getRegister(lastUsedXmm);
+          if (!MRI.isPhysRegUsed(Candidate)) {
+            SpillReg = Candidate;
+            lastUsedXmm++;
+            break;
+          }
+        }
+        if (SpillReg != MCRegister::NoRegister) {
+          LLVM_DEBUG(dbgs() << "Save " << printReg(Reg, TRI)
+                            << " by copy to " << printReg(SpillReg, TRI) << '\n');
+          I.setDstReg(SpillReg);
+          continue;
+        }
+      }
+    }
+
 
     SpillSlotOffset -= SlotSize;
     CalleeSavedFrameSize += SlotSize;
@@ -2695,6 +2730,7 @@ bool X86FrameLowering::assignCalleeSavedSpillSlots(
   return true;
 }
 
+#include "llvm/Support/ZebraProperties.h"
 bool X86FrameLowering::spillCalleeSavedRegisters(
     MachineBasicBlock &MBB, MachineBasicBlock::iterator MI,
     ArrayRef<CalleeSavedInfo> CSI, const TargetRegisterInfo *TRI) const {
@@ -2731,6 +2767,14 @@ bool X86FrameLowering::spillCalleeSavedRegisters(
       }
     }
 
+    if (I.isSpilledToReg()) {
+      BuildMI(MBB, MI, DL, TII.get(TargetOpcode::COPY),
+              I.getDstReg())
+          .addReg(Reg, getKillRegState(CanKill))
+          .setMIFlag(MachineInstr::FrameSetup);
+      continue;
+    }
+
     // Do not set a kill flag on values that are also marked as live-in. This
     // happens with the @llvm-returnaddress intrinsic and with arguments
     // passed in callee saved registers.
@@ -2758,6 +2802,13 @@ bool X86FrameLowering::spillCalleeSavedRegisters(
 
     TII.storeRegToStackSlot(MBB, MI, Reg, true, I.getFrameIdx(), RC, TRI,
                             Register());
+    const Attribute &FZAttr = MBB.getParent()->getFunction().getFnAttribute(Attribute::Zebra);
+    bool IsZebraCopy = FZAttr.getKindAsEnum() == Attribute::Zebra &&
+                       (FZAttr.getZebraProperties().getState() == ZebraProperties::Copy
+                        || FZAttr.getZebraProperties().getState() == ZebraProperties::CopyRewritten);
+    if (IsZebraCopy) {
+      dbgs() << "[ZEBRA LLVM-RegA] Spilling register " << printReg(Reg, TRI) << " to stack in function " << MBB.getParent()->getName() << "\n";
+    }
     --MI;
     MI->setFlag(MachineInstr::FrameSetup);
     ++MI;
@@ -2844,6 +2895,13 @@ bool X86FrameLowering::restoreCalleeSavedRegisters(
     if (!X86::GR64RegClass.contains(Reg) &&
         !X86::GR32RegClass.contains(Reg))
       continue;
+
+    if (I.isSpilledToReg()) {
+      BuildMI(MBB, MI, DL, TII.get(TargetOpcode::COPY), Reg)
+          .addReg(I.getDstReg(), RegState::Kill)
+          .setMIFlag(MachineInstr::FrameDestroy);
+      continue;
+    }
 
     BuildMI(MBB, MI, DL, TII.get(Opc), Reg)
         .setMIFlag(MachineInstr::FrameDestroy);

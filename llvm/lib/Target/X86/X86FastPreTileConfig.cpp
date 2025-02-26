@@ -197,6 +197,7 @@ void X86FastPreTileConfig::InitializeTileConfigStackSpace() {
       .addImm(1);
 }
 
+#include "llvm/Support/ZebraProperties.h"
 /// Insert spill instruction for \p AssignedReg before \p Before.
 /// TODO: Update DBG_VALUEs with \p VirtReg operands with the stack slot.
 void X86FastPreTileConfig::spill(MachineBasicBlock::iterator Before,
@@ -210,6 +211,14 @@ void X86FastPreTileConfig::spill(MachineBasicBlock::iterator Before,
   // the tile def instruction.
   TII->storeRegToStackSlot(*MBB, Before, VirtReg, Kill, FI, &RC, TRI,
                            Register());
+
+  const Attribute &FZAttr = MF->getFunction().getFnAttribute(Attribute::Zebra);
+  bool IsZebraCopy = FZAttr.getKindAsEnum() == Attribute::Zebra &&
+                     (FZAttr.getZebraProperties().getState() == ZebraProperties::Copy
+                      || FZAttr.getZebraProperties().getState() == ZebraProperties::CopyRewritten);
+  if (IsZebraCopy) {
+    dbgs() << "[ZEBRA LLVM-RegA] Spilling register " << printReg(VirtReg, TRI) << " to stack in function " << MBB->getParent()->getName() << "\n";
+  }
   ++NumStores;
 
   // TODO: update DBG_VALUEs

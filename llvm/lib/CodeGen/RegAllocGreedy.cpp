@@ -8,6 +8,8 @@
 //
 // This file defines the RAGreedy function pass for register allocation in
 // optimized builds.
+// Contains code from Matthias Braun as mentioned here:
+// https://discourse.llvm.org/t/rfc-spill2reg-selectively-replace-spills-to-stack-with-spills-to-vector-registers/59630/15
 //
 //===----------------------------------------------------------------------===//
 
@@ -303,6 +305,7 @@ unsigned DefaultPriorityAdvisor::getPriority(const LiveInterval &LI) const {
   unsigned Prio;
   LiveRangeStage Stage = RA.getExtraInfo().getStage(LI);
 
+  const TargetRegisterClass &RC = *MRI->getRegClass(Reg);
   if (Stage == RS_Split) {
     // Unsplit ranges that couldn't be allocated immediately are deferred until
     // everything else has been allocated.
@@ -317,7 +320,7 @@ unsigned DefaultPriorityAdvisor::getPriority(const LiveInterval &LI) const {
   } else {
     // Giant live ranges fall back to the global assignment heuristic, which
     // prevents excessive spilling in pathological cases.
-    const TargetRegisterClass &RC = *MRI->getRegClass(Reg);
+    //const TargetRegisterClass &RC = *MRI->getRegClass(Reg);
     bool ForceGlobal = RC.GlobalPriority ||
                        (!ReverseLocalAssignment &&
                         (Size / SlotIndex::InstrDist) >
@@ -363,15 +366,17 @@ unsigned DefaultPriorityAdvisor::getPriority(const LiveInterval &LI) const {
     if (RegClassPriorityTrumpsGlobalness)
       Prio |= RC.AllocationPriority << 25 | GlobalBit << 24;
     else
-      Prio |= GlobalBit << 29 | RC.AllocationPriority << 24;
+      //Prio |= GlobalBit << 29 | RC.AllocationPriority << 24;
+      Prio = (1u << 21) + Size;
 
     // Mark a higher bit to prioritize global and local above RS_Split.
-    Prio |= (1u << 31);
+    Prio |= (1u << 23);
 
     // Boost ranges that have a physical register hint.
     if (VRM->hasKnownPreference(Reg))
-      Prio |= (1u << 30);
+      Prio |= (1u << 22);
   }
+  Prio |= RC.AllocationPriority << 24;
 
   return Prio;
 }
@@ -1498,7 +1503,7 @@ unsigned RAGreedy::tryLocalSplit(const LiveInterval &VirtReg,
   // If VirtReg is live across any register mask operands, compute a list of
   // gaps with register masks.
   SmallVector<unsigned, 8> RegMaskGaps;
-  if (Matrix->checkRegMaskInterference(VirtReg)) {
+  if (Matrix->checkRegMaskInterference(VirtReg, VirtReg.reg())) {
     // Get regmask slots for the whole block.
     ArrayRef<SlotIndex> RMS = LIS->getRegMaskSlotsInBlock(BI.MBB->getNumber());
     LLVM_DEBUG(dbgs() << RMS.size() << " regmasks in block:");
@@ -1563,7 +1568,7 @@ unsigned RAGreedy::tryLocalSplit(const LiveInterval &VirtReg,
     calcGapWeights(PhysReg, GapWeight);
 
     // Remove any gaps with regmask clobbers.
-    if (Matrix->checkRegMaskInterference(VirtReg, PhysReg))
+    if (Matrix->checkRegMaskInterference(VirtReg, VirtReg.reg(), PhysReg))
       for (unsigned I = 0, E = RegMaskGaps.size(); I != E; ++I)
         GapWeight[RegMaskGaps[I]] = huge_valf;
 
@@ -2623,6 +2628,7 @@ bool RAGreedy::runOnMachineFunction(MachineFunction &mf) {
   MBFI = &getAnalysis<MachineBlockFrequencyInfo>();
   DomTree = &getAnalysis<MachineDominatorTree>();
   ORE = &getAnalysis<MachineOptimizationRemarkEmitterPass>().getORE();
+  SpillerInstance.reset(createInlineSpiller(*this, *MF, *VRM, RegClassInfo, *Matrix, *VRAI));
   Loops = &getAnalysis<MachineLoopInfo>();
   Bundles = &getAnalysis<EdgeBundles>();
   SpillPlacer = &getAnalysis<SpillPlacement>();
@@ -2647,7 +2653,7 @@ bool RAGreedy::runOnMachineFunction(MachineFunction &mf) {
       getAnalysis<RegAllocPriorityAdvisorAnalysis>().getAdvisor(*MF, *this);
 
   VRAI = std::make_unique<VirtRegAuxInfo>(*MF, *LIS, *VRM, *Loops, *MBFI);
-  SpillerInstance.reset(createInlineSpiller(*this, *MF, *VRM, *VRAI));
+  SpillerInstance.reset(createInlineSpiller(*this, *MF, *VRM, RegClassInfo, *Matrix, *VRAI));
 
   VRAI->calculateSpillWeightsAndHints();
 

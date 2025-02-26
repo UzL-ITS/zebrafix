@@ -9,6 +9,8 @@
 // This file describes an abstract interface used to get information about a
 // target machines register file.  This information is used for a variety of
 // purposed, especially register allocation.
+// Contains code from Matthias Braun as mentioned here:
+// https://discourse.llvm.org/t/rfc-spill2reg-selectively-replace-spills-to-stack-with-spills-to-vector-registers/59630/15
 //
 //===----------------------------------------------------------------------===//
 
@@ -636,6 +638,11 @@ public:
   getSubClassWithSubReg(const TargetRegisterClass *RC, unsigned Idx) const {
     assert(Idx == 0 && "Target has no sub-registers");
     return RC;
+  }
+
+  virtual const TargetRegisterClass* spillToOtherClass(const MachineRegisterInfo& MRI,
+                                                       Register Reg) const {
+    return nullptr;
   }
 
   /// Return a register class that can be used for a subregister copy from/into

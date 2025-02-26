@@ -554,6 +554,7 @@ static MachineInstr *foldPatchpoint(MachineFunction &MF, MachineInstr &MI,
   return NewMI;
 }
 
+#include "llvm/Support/ZebraProperties.h"
 MachineInstr *TargetInstrInfo::foldMemoryOperand(MachineInstr &MI,
                                                  ArrayRef<unsigned> Ops, int FI,
                                                  LiveIntervals *LIS,
@@ -639,9 +640,18 @@ MachineInstr *TargetInstrInfo::foldMemoryOperand(MachineInstr &MI,
   const MachineOperand &MO = MI.getOperand(1 - Ops[0]);
   MachineBasicBlock::iterator Pos = MI;
 
-  if (Flags == MachineMemOperand::MOStore)
+  if (Flags == MachineMemOperand::MOStore) {
     storeRegToStackSlot(*MBB, Pos, MO.getReg(), MO.isKill(), FI, RC, TRI,
                         Register());
+
+    const Attribute &FZAttr = MF.getFunction().getFnAttribute(Attribute::Zebra);
+    bool IsZebraCopy = FZAttr.getKindAsEnum() == Attribute::Zebra &&
+                       (FZAttr.getZebraProperties().getState() == ZebraProperties::Copy
+                        || FZAttr.getZebraProperties().getState() == ZebraProperties::CopyRewritten);
+    if (IsZebraCopy) {
+      dbgs() << "[ZEBRA LLVM-RegA] Spilling register " << printReg(MO.getReg(), TRI) << " to stack for fold in function " << MBB->getParent()->getName() << "\n";
+    }
+  }
   else
     loadRegFromStackSlot(*MBB, Pos, MO.getReg(), FI, RC, TRI, Register());
   return &*--Pos;

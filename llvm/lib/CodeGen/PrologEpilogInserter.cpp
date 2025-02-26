@@ -588,6 +588,7 @@ static void updateLiveness(MachineFunction &MF) {
   }
 }
 
+#include "llvm/Support/ZebraProperties.h"
 /// Insert spill code for the callee-saved registers used in the function.
 static void insertCSRSaves(MachineBasicBlock &SaveBlock,
                            ArrayRef<CalleeSavedInfo> CSI) {
@@ -610,6 +611,14 @@ static void insertCSRSaves(MachineBasicBlock &SaveBlock,
         const TargetRegisterClass *RC = TRI->getMinimalPhysRegClass(Reg);
         TII.storeRegToStackSlot(SaveBlock, I, Reg, true, CS.getFrameIdx(), RC,
                                 TRI, Register());
+
+        const Attribute &FZAttr = MF.getFunction().getFnAttribute(Attribute::Zebra);
+        bool IsZebraCopy = FZAttr.getKindAsEnum() == Attribute::Zebra &&
+                           (FZAttr.getZebraProperties().getState() == ZebraProperties::Copy
+                            || FZAttr.getZebraProperties().getState() == ZebraProperties::CopyRewritten);
+        if (IsZebraCopy) {
+          dbgs() << "[ZEBRA LLVM-RegA] Spilling register " << printReg(Reg, TRI) << " to stack in function " << SaveBlock.getParent()->getName() << "\n";
+        }
       }
     }
   }

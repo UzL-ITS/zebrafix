@@ -9,6 +9,8 @@
 // This file implements the generic RegisterCoalescer interface which
 // is used as the common interface used by all clients and
 // implementations of register coalescing.
+// Contains code from Matthias Braun as mentioned here:
+// https://discourse.llvm.org/t/rfc-spill2reg-selectively-replace-spills-to-stack-with-spills-to-vector-registers/59630/15
 //
 //===----------------------------------------------------------------------===//
 
@@ -2179,7 +2181,7 @@ bool RegisterCoalescer::joinReservedPhysReg(CoalescerPair &CP) {
 
     // We must also check for overlaps with regmask clobbers.
     BitVector RegMaskUsable;
-    if (LIS->checkRegMaskInterference(RHS, RegMaskUsable) &&
+    if (LIS->checkRegMaskInterference(RHS, RHS.reg(), RegMaskUsable) &&
         !RegMaskUsable.test(DstReg)) {
       LLVM_DEBUG(dbgs() << "\t\tRegMask interference\n");
       return false;

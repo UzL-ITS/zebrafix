@@ -448,6 +448,7 @@ static unsigned getFrameIndexOperandNum(MachineInstr &MI) {
   return i;
 }
 
+#include "llvm/Support/ZebraProperties.h"
 RegScavenger::ScavengedInfo &
 RegScavenger::spill(Register Reg, const TargetRegisterClass &RC, int SPAdj,
                     MachineBasicBlock::iterator Before,
@@ -507,6 +508,13 @@ RegScavenger::spill(Register Reg, const TargetRegisterClass &RC, int SPAdj,
                          "spill slot!");
     }
     TII->storeRegToStackSlot(*MBB, Before, Reg, true, FI, &RC, TRI, Register());
+    const Attribute &FZAttr = MBB->getParent()->getFunction().getFnAttribute(Attribute::Zebra);
+    bool IsZebraCopy = FZAttr.getKindAsEnum() == Attribute::Zebra &&
+                       (FZAttr.getZebraProperties().getState() == ZebraProperties::Copy
+                        || FZAttr.getZebraProperties().getState() == ZebraProperties::CopyRewritten);
+    if (IsZebraCopy) {
+      dbgs() << "[ZEBRA LLVM-RegA] Spilling register " << printReg(Reg, TRI, 0, MRI) << " to stack in function " << MBB->getParent()->getName() << "\n";
+    }
     MachineBasicBlock::iterator II = std::prev(Before);
 
     unsigned FIOperandNum = getFrameIndexOperandNum(*II);

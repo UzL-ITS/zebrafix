@@ -25,6 +25,8 @@
 //   architectures. In Proceedings of the Joint Conference on Languages,
 //   Compilers and Tools for Embedded Systems (LCTES'02), ACM Press, New York,
 //   NY, USA, 139-148.
+// Contains code from Matthias Braun as mentioned here:
+// https://discourse.llvm.org/t/rfc-spill2reg-selectively-replace-spills-to-stack-with-spills-to-vector-registers/59630/15
 //
 //===----------------------------------------------------------------------===//
 
@@ -618,7 +620,7 @@ void RegAllocPBQP::initializeGraph(PBQPRAGraph &G, VirtRegMap &VRM,
 
     // Record any overlaps with regmask operands.
     BitVector RegMaskOverlaps;
-    LIS.checkRegMaskInterference(VRegLI, RegMaskOverlaps);
+    LIS.checkRegMaskInterference(VRegLI, VRegLI.reg(), RegMaskOverlaps);
 
     // Compute an initial allowed set for the current vreg.
     std::vector<MCRegister> VRegAllowed;
@@ -806,8 +808,8 @@ bool RegAllocPBQP::runOnMachineFunction(MachineFunction &MF) {
   // LiveRangeEdit make its own VirtRegAuxInfo object.
   VirtRegAuxInfo DefaultVRAI(MF, LIS, VRM, getAnalysis<MachineLoopInfo>(),
                              MBFI);
-  std::unique_ptr<Spiller> VRegSpiller(
-      createInlineSpiller(*this, MF, VRM, DefaultVRAI));
+  // TODO: Fixme!
+  std::unique_ptr<Spiller> VRegSpiller(nullptr);
 
   MF.getRegInfo().freezeReservedRegs(MF);
 

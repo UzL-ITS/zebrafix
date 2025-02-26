@@ -7,6 +7,8 @@
 //===----------------------------------------------------------------------===//
 //
 // This file defines the LiveRegMatrix analysis pass.
+// Contains code from Matthias Braun as mentioned here:
+// https://discourse.llvm.org/t/rfc-spill2reg-selectively-replace-spills-to-stack-with-spills-to-vector-registers/59630/15
 //
 //===----------------------------------------------------------------------===//
 
@@ -104,8 +106,12 @@ static bool foreachUnit(const TargetRegisterInfo *TRI,
 void LiveRegMatrix::assign(const LiveInterval &VirtReg, MCRegister PhysReg) {
   LLVM_DEBUG(dbgs() << "assigning " << printReg(VirtReg.reg(), TRI) << " to "
                     << printReg(PhysReg, TRI) << ':');
-  assert(!VRM->hasPhys(VirtReg.reg()) && "Duplicate VirtReg assignment");
-  VRM->assignVirt2Phys(VirtReg.reg(), PhysReg);
+  Register Reg = VirtReg.reg();
+  if (!VRM->hasPhys(Reg)) {
+    VRM->assignVirt2Phys(Reg, PhysReg);
+  } else {
+    assert(VRM->getPhys(Reg) == PhysReg && "Duplicate VirtReg assignment");
+  }
 
   foreachUnit(
       TRI, VirtReg, PhysReg, [&](unsigned Unit, const LiveRange &Range) {
@@ -143,16 +149,17 @@ bool LiveRegMatrix::isPhysRegUsed(MCRegister PhysReg) const {
   return false;
 }
 
-bool LiveRegMatrix::checkRegMaskInterference(const LiveInterval &VirtReg,
+bool LiveRegMatrix::checkRegMaskInterference(const LiveRange &LR, Register VirtReg,
                                              MCRegister PhysReg) {
   // Check if the cached information is valid.
   // The same BitVector can be reused for all PhysRegs.
   // We could cache multiple VirtRegs if it becomes necessary.
-  if (RegMaskVirtReg != VirtReg.reg() || RegMaskTag != UserTag) {
-    RegMaskVirtReg = VirtReg.reg();
+  if (VirtReg == MCRegister::NoRegister || RegMaskVirtReg != VirtReg ||
+      RegMaskTag != UserTag) {
+    RegMaskVirtReg = VirtReg;
     RegMaskTag = UserTag;
     RegMaskUsable.clear();
-    LIS->checkRegMaskInterference(VirtReg, RegMaskUsable);
+    LIS->checkRegMaskInterference(LR, VirtReg, RegMaskUsable);
   }
 
   // The BitVector is indexed by PhysReg, not register unit.
@@ -189,7 +196,7 @@ LiveRegMatrix::checkInterference(const LiveInterval &VirtReg,
     return IK_Free;
 
   // Regmask interference is the fastest check.
-  if (checkRegMaskInterference(VirtReg, PhysReg))
+  if (checkRegMaskInterference(VirtReg, VirtReg.reg(), PhysReg))
     return IK_RegMask;
 
   // Check for fixed interference.
@@ -232,6 +239,26 @@ bool LiveRegMatrix::checkInterference(SlotIndex Start, SlotIndex End,
     LiveIntervalUnion::Query Q;
     Q.reset(UserTag, LR, Matrix[*Units]);
     if (Q.checkInterference())
+      return true;
+  }
+  return false;
+}
+
+bool LiveRegMatrix::checkInterferenceWithRange(const LiveRange& LR, MCRegister PhysReg) {
+  if (LR.empty())
+    return false;
+
+  // Regmask interference is the fastest check.
+  if (checkRegMaskInterference(LR, MCRegister::NoRegister, PhysReg))
+    return true;
+
+  for (MCRegUnitIterator Units(PhysReg, TRI); Units.isValid(); ++Units) {
+    // Check for fixed interference.
+    const LiveRange &UnitRange = LIS->getRegUnit(*Units);
+    if (LR.overlaps(UnitRange))
+      return true;
+    // Check for interference with current assignments.
+    if (query(LR, *Units).checkInterference())
       return true;
   }
   return false;

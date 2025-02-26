@@ -46,6 +46,8 @@
 //    $R1 = OP ...
 //    ...
 //
+// Contains code from Matthias Braun as mentioned here:
+// https://discourse.llvm.org/t/rfc-spill2reg-selectively-replace-spills-to-stack-with-spills-to-vector-registers/59630/15
 //===----------------------------------------------------------------------===//
 
 #include "llvm/ADT/DenseMap.h"
@@ -816,6 +818,10 @@ void MachineCopyPropagation::ForwardCopyPropagateBlock(MachineBasicBlock &MBB) {
   // since we don't want to trust live-in lists.
   if (MBB.succ_empty()) {
     for (MachineInstr *MaybeDead : MaybeDeadCopies) {
+      // Skip COPYs used as part of FrameDestroy, since the code here just
+      // assumes nothing is live-out in a block without successors...
+      if (MaybeDead->getFlag(MachineInstr::FrameDestroy))
+        continue;
       LLVM_DEBUG(dbgs() << "MCP: Removing copy due to no live-out succ: ";
                  MaybeDead->dump());
 

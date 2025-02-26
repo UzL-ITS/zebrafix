@@ -8,6 +8,8 @@
 //
 // The inline spiller modifies the machine function directly instead of
 // inserting spills and restores in VirtRegMap.
+// Contains code from Matthias Braun as mentioned here:
+// https://discourse.llvm.org/t/rfc-spill2reg-selectively-replace-spills-to-stack-with-spills-to-vector-registers/59630/15
 //
 //===----------------------------------------------------------------------===//
 
@@ -24,6 +26,7 @@
 #include "llvm/CodeGen/LiveInterval.h"
 #include "llvm/CodeGen/LiveIntervals.h"
 #include "llvm/CodeGen/LiveRangeEdit.h"
+#include "llvm/CodeGen/LiveRegMatrix.h"
 #include "llvm/CodeGen/LiveStacks.h"
 #include "llvm/CodeGen/MachineBasicBlock.h"
 #include "llvm/CodeGen/MachineBlockFrequencyInfo.h"
@@ -163,6 +166,8 @@ class InlineSpiller : public Spiller {
   const TargetInstrInfo &TII;
   const TargetRegisterInfo &TRI;
   const MachineBlockFrequencyInfo &MBFI;
+  const RegisterClassInfo& RegClassInfo;
+  LiveRegMatrix& Matrix;
 
   // Variables that are valid during spill(), but used by multiple methods.
   LiveRangeEdit *Edit;
@@ -193,6 +198,7 @@ class InlineSpiller : public Spiller {
 
 public:
   InlineSpiller(MachineFunctionPass &Pass, MachineFunction &MF, VirtRegMap &VRM,
+                const RegisterClassInfo& RegClassInfo, LiveRegMatrix &Matrix,
                 VirtRegAuxInfo &VRAI)
       : MF(MF), LIS(Pass.getAnalysis<LiveIntervals>()),
         LSS(Pass.getAnalysis<LiveStacks>()),
@@ -201,6 +207,8 @@ public:
         MRI(MF.getRegInfo()), TII(*MF.getSubtarget().getInstrInfo()),
         TRI(*MF.getSubtarget().getRegisterInfo()),
         MBFI(Pass.getAnalysis<MachineBlockFrequencyInfo>()),
+        RegClassInfo(RegClassInfo),
+        Matrix(Matrix),
         HSpiller(Pass, MF, VRM), VRAI(VRAI) {}
 
   void spill(LiveRangeEdit &) override;
@@ -229,6 +237,8 @@ private:
 
   void spillAroundUses(Register Reg);
   void spillAll();
+
+  bool spillToOtherClass();
 };
 
 } // end anonymous namespace
@@ -239,8 +249,10 @@ void Spiller::anchor() {}
 
 Spiller *llvm::createInlineSpiller(MachineFunctionPass &Pass,
                                    MachineFunction &MF, VirtRegMap &VRM,
+                                   const RegisterClassInfo &RegClassInfo,
+                                   LiveRegMatrix &Matrix,
                                    VirtRegAuxInfo &VRAI) {
-  return new InlineSpiller(Pass, MF, VRM, VRAI);
+  return new InlineSpiller(Pass, MF, VRM, RegClassInfo, Matrix, VRAI);
 }
 
 //===----------------------------------------------------------------------===//
@@ -391,6 +403,7 @@ bool InlineSpiller::isSibling(Register Reg) {
 ///
 /// This hoist only helps when the copy kills its source.
 ///
+#include "llvm/Support/ZebraProperties.h"
 bool InlineSpiller::hoistSpillInsideBB(LiveInterval &SpillLI,
                                        MachineInstr &CopyMI) {
   SlotIndex Idx = LIS.getInstructionIndex(CopyMI);
@@ -435,6 +448,14 @@ bool InlineSpiller::hoistSpillInsideBB(LiveInterval &SpillLI,
   // Insert spill without kill flag immediately after def.
   TII.storeRegToStackSlot(*MBB, MII, SrcReg, false, StackSlot,
                           MRI.getRegClass(SrcReg), &TRI, Register());
+
+  const Attribute &FZAttr = MF.getFunction().getFnAttribute(Attribute::Zebra);
+  bool IsZebraCopy = FZAttr.getKindAsEnum() == Attribute::Zebra &&
+                     (FZAttr.getZebraProperties().getState() == ZebraProperties::Copy
+                      || FZAttr.getZebraProperties().getState() == ZebraProperties::CopyRewritten);
+  if (IsZebraCopy) {
+    dbgs() << "[ZEBRA LLVM-RegA] Spilling register " << printReg(SrcReg, &TRI, 0, &MRI) << " to stack in function " << MBB->getParent()->getName() << "\n";
+  }
   LIS.InsertMachineInstrRangeInMaps(MIS.begin(), MII);
   for (const MachineInstr &MI : make_range(MIS.begin(), MII))
     getVDefInterval(MI, LIS);
@@ -1045,9 +1066,17 @@ void InlineSpiller::insertSpill(Register NewVReg, bool isKill,
   MachineBasicBlock::iterator SpillBefore = std::next(MI);
   bool IsRealSpill = isRealSpill(*MI);
 
-  if (IsRealSpill)
+  if (IsRealSpill) {
     TII.storeRegToStackSlot(MBB, SpillBefore, NewVReg, isKill, StackSlot,
                             MRI.getRegClass(NewVReg), &TRI, Register());
+    const Attribute &FZAttr = MF.getFunction().getFnAttribute(Attribute::Zebra);
+    bool IsZebraCopy = FZAttr.getKindAsEnum() == Attribute::Zebra &&
+                       (FZAttr.getZebraProperties().getState() == ZebraProperties::Copy
+                        || FZAttr.getZebraProperties().getState() == ZebraProperties::CopyRewritten);
+    if (IsZebraCopy) {
+      dbgs() << "[ZEBRA LLVM-RegA] Spilling register " << printReg(NewVReg, &TRI, 0, &MRI) << " to stack in function " << MBB.getParent()->getName() << "\n";
+    }
+  }
   else
     // Don't spill undef value.
     // Anything works for undef, in particular keeping the memory
@@ -1169,26 +1198,33 @@ void InlineSpiller::spillAroundUses(Register Reg) {
 
 /// spillAll - Spill all registers remaining after rematerialization.
 void InlineSpiller::spillAll() {
-  // Update LiveStacks now that we are committed to spilling.
-  if (StackSlot == VirtRegMap::NO_STACK_SLOT) {
-    StackSlot = VRM.assignVirt2StackSlot(Original);
-    StackInt = &LSS.getOrCreateInterval(StackSlot, MRI.getRegClass(Original));
-    StackInt->getNextValue(SlotIndex(), LSS.getVNInfoAllocator());
-  } else
-    StackInt = &LSS.getInterval(StackSlot);
+  if (spillToOtherClass()) {
+    // Succeeded in copying value to a different register class.
+    LLVM_DEBUG(dbgs() << "Succeeded in copying value to a different register class.\n");
+    //dbgs() << "Succeeded in copying value to a different register class.\n";
+  }
+  else {
+    // Update LiveStacks now that we are committed to spilling.
+    if (StackSlot == VirtRegMap::NO_STACK_SLOT) {
+      StackSlot = VRM.assignVirt2StackSlot(Original);
+      StackInt = &LSS.getOrCreateInterval(StackSlot, MRI.getRegClass(Original));
+      StackInt->getNextValue(SlotIndex(), LSS.getVNInfoAllocator());
+    } else
+      StackInt = &LSS.getInterval(StackSlot);
 
-  if (Original != Edit->getReg())
-    VRM.assignVirt2StackSlot(Edit->getReg(), StackSlot);
+    if (Original != Edit->getReg())
+      VRM.assignVirt2StackSlot(Edit->getReg(), StackSlot);
 
-  assert(StackInt->getNumValNums() == 1 && "Bad stack interval values");
-  for (Register Reg : RegsToSpill)
-    StackInt->MergeSegmentsInAsValue(LIS.getInterval(Reg),
-                                     StackInt->getValNumInfo(0));
-  LLVM_DEBUG(dbgs() << "Merged spilled regs: " << *StackInt << '\n');
+    assert(StackInt->getNumValNums() == 1 && "Bad stack interval values");
+    for (Register Reg : RegsToSpill)
+      StackInt->MergeSegmentsInAsValue(LIS.getInterval(Reg),
+                                       StackInt->getValNumInfo(0));
+    LLVM_DEBUG(dbgs() << "Merged spilled regs: " << *StackInt << '\n');
 
-  // Spill around uses of all RegsToSpill.
-  for (Register Reg : RegsToSpill)
-    spillAroundUses(Reg);
+    // Spill around uses of all RegsToSpill.
+    for (Register Reg : RegsToSpill)
+      spillAroundUses(Reg);
+  }
 
   // Hoisted spills may cause dead code.
   if (!DeadDefs.empty()) {
@@ -1210,6 +1246,119 @@ void InlineSpiller::spillAll() {
   // Delete all spilled registers.
   for (Register Reg : RegsToSpill)
     Edit->eraseVirtReg(Reg);
+}
+
+bool InlineSpiller::spillToOtherClass() {
+  const TargetRegisterClass* SpillRC = TRI.spillToOtherClass(MRI, Original);
+  if (SpillRC == nullptr)
+    return false;
+
+  // Don't deal with subranges for now.
+  for (Register Reg : RegsToSpill) {
+    LiveInterval& LI = LIS.getInterval(Reg);
+    if (LI.hasSubRanges()) {
+      return false;
+    }
+  }
+
+  // TODO: Find a way to do the interference check without creating new LiveInterval objects.
+  ArrayRef<MCPhysReg> Order = RegClassInfo.getOrder(SpillRC);
+  VNInfo::Allocator VNIAllocator = LIS.getVNInfoAllocator();
+  MCRegister SpillPhysReg = MCRegister::NoRegister;
+  for (MCPhysReg Candidate : Order) {
+    bool RegFree = true;
+    for (Register Reg : RegsToSpill) {
+      const LiveInterval& LI = LIS.getInterval(Reg);
+      if (Matrix.checkInterferenceWithRange(LI, Candidate) != LiveRegMatrix::IK_Free) {
+        RegFree = false;
+        break;
+      }
+    }
+    if (RegFree) {
+      SpillPhysReg = Candidate;
+      break;
+    }
+  }
+  if (SpillPhysReg == MCRegister::NoRegister) {
+    return false;
+  }
+
+  Register SpillReg = MRI.createVirtualRegister(SpillRC);
+
+  LLVM_DEBUG(dbgs() << "Spill by copying to " << printReg(SpillPhysReg, &TRI) << ".\n");
+  //dbgs() << "Spill by copying to " << printReg(SpillPhysReg, &TRI) << ".\n";
+  VRM.assignVirt2Phys(SpillReg, SpillPhysReg);
+
+  // Iterate over instructions using Reg.
+  for (Register Reg : RegsToSpill) {
+    for (MachineRegisterInfo::reg_bundle_iterator
+             RegI = MRI.reg_bundle_begin(Reg), E = MRI.reg_bundle_end();
+         RegI != E; ) {
+      MachineInstr &MI = *(RegI++);
+      if (MI.isDebugValue()) {
+        // TODO
+        abort();
+      }
+      assert(!MI.isDebugInstr() && "Did not expect to find a use in debug "
+                                   "instruction that isn't a DBG_VALUE");
+
+      // Ignore copies to/from snippets. We'll delete them.
+      if (SnippetCopies.count(&MI))
+        continue;
+
+      // Analyze instruction.
+      SmallVector<std::pair<MachineInstr*, unsigned>, 8> Ops;
+      VirtRegInfo RI = AnalyzeVirtRegInBundle(MI, Reg, &Ops);
+
+      Register NewVReg = Edit->createFrom(Reg);
+      if (RI.Reads) {
+        // Insert copy before use.
+        MachineBasicBlock &MBB = *MI.getParent();
+        const MCInstrDesc &Desc = TII.get(TargetOpcode::COPY);
+        MachineInstr* CopyMI = BuildMI(MBB, MI.getIterator(), DebugLoc(), Desc)
+                                   .addReg(NewVReg, RegState::Define)
+                                   .addReg(SpillReg);
+
+        LIS.InsertMachineInstrInMaps(*CopyMI);
+        LLVM_DEBUG(dumpMachineInstrRangeWithSlotIndex(CopyMI->getIterator(),
+                                                      MI.getIterator(), LIS,
+                                                      "copy from other",
+                                                      NewVReg));
+      }
+
+      // Rewrite instruction operands.
+      bool hasLiveDef = false;
+      for (const auto &OpPair : Ops) {
+        MachineOperand &MO = OpPair.first->getOperand(OpPair.second);
+        MO.setReg(NewVReg);
+        if (MO.isUse()) {
+          if (!OpPair.first->isRegTiedToDefOperand(OpPair.second))
+            MO.setIsKill();
+        } else {
+          if (!MO.isDead())
+            hasLiveDef = true;
+        }
+      }
+
+      if (hasLiveDef) {
+        // Insert COPY from def to newvreg.
+        MachineBasicBlock &MBB = *MI.getParent();
+        const MCInstrDesc &Desc = TII.get(TargetOpcode::COPY);
+        MachineInstr* CopyMI = BuildMI(MBB, std::next(MI.getIterator()),
+                                       DebugLoc(), Desc)
+                                   .addReg(SpillReg, RegState::Define)
+                                   .addReg(NewVReg);
+
+        LIS.InsertMachineInstrInMaps(*CopyMI);
+        LLVM_DEBUG(dumpMachineInstrRangeWithSlotIndex(MI.getIterator(),
+                                                      std::next(CopyMI->getIterator()), LIS,
+                                                      "copy to other",
+                                                      NewVReg));
+      }
+    }
+  }
+
+  return true;
 }
 
 void InlineSpiller::spill(LiveRangeEdit &edit) {
@@ -1614,6 +1763,13 @@ void HoistSpillHelper::hoistAllSpills() {
       MachineInstrSpan MIS(MII, BB);
       TII.storeRegToStackSlot(*BB, MII, LiveReg, false, Slot,
                               MRI.getRegClass(LiveReg), &TRI, Register());
+      const Attribute &FZAttr = MF.getFunction().getFnAttribute(Attribute::Zebra);
+      bool IsZebraCopy = FZAttr.getKindAsEnum() == Attribute::Zebra &&
+                         (FZAttr.getZebraProperties().getState() == ZebraProperties::Copy
+                          || FZAttr.getZebraProperties().getState() == ZebraProperties::CopyRewritten);
+      if (IsZebraCopy) {
+        dbgs() << "[ZEBRA LLVM-RegA] Spilling register " << printReg(LiveReg, &TRI, 0, &MRI) << " to stack in function " << BB->getParent()->getName() << "\n";
+      }
       LIS.InsertMachineInstrRangeInMaps(MIS.begin(), MII);
       for (const MachineInstr &MI : make_range(MIS.begin(), MII))
         getVDefInterval(MI, LIS);

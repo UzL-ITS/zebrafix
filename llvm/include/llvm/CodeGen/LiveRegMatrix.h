@@ -17,6 +17,8 @@
 // a virtual register is assigned to a physical register, the live range for
 // the virtual register is inserted into the LiveIntervalUnion for each regunit
 // in the physreg.
+// Contains code from Matthias Braun as mentioned here:
+// https://discourse.llvm.org/t/rfc-spill2reg-selectively-replace-spills-to-stack-with-spills-to-vector-registers/59630/15
 //
 //===----------------------------------------------------------------------===//
 
@@ -107,6 +109,8 @@ public:
   InterferenceKind checkInterference(const LiveInterval &VirtReg,
                                      MCRegister PhysReg);
 
+  bool checkInterferenceWithRange(const LiveRange& Range, MCRegister PhysReg);
+
   /// Check for interference in the segment [Start, End) that may prevent
   /// assignment to PhysReg. If this function returns true, there is
   /// interference in the segment [Start, End) of some other interval already
@@ -135,9 +139,10 @@ public:
   //
 
   /// Check for regmask interference only.
-  /// Return true if VirtReg crosses a regmask operand that clobbers PhysReg.
-  /// If PhysReg is null, check if VirtReg crosses any regmask operands.
-  bool checkRegMaskInterference(const LiveInterval &VirtReg,
+  /// Return true if live range LR crosses a regmask operand that clobbers
+  /// PhysReg.  If PhysReg is NoRegister, check if LR crosses any regmask
+  /// operands.
+  bool checkRegMaskInterference(const LiveRange& LR, Register VirtReg,
                                 MCRegister PhysReg = MCRegister::NoRegister);
 
   /// Check for regunit interference only.
