@@ -6847,3 +6847,14 @@ def ReadOnlyPlacementDocs : Documentation {
      ``enforce_read_only_placement`` attribute.
   }];
 }
+
+def ZebraDocs : Documentation {
+  let Category = DocCatFunction;
+  let Content = [{Compiler-based ciphertext side-channel countermeasure.
+    Syntax:
+      * ``[[clang::zebra]] void ...`` for normal functions
+      * ``[[clang::zebra(extern)]] void ... ;`` for declarations of functions in
+        other compile units/libraries.
+
+  }];
+}

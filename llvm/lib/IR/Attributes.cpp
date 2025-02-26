@@ -30,6 +30,7 @@
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/ModRef.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/Support/ZebraProperties.h"
 #include <algorithm>
 #include <cassert>
 #include <cstddef>
@@ -216,6 +217,10 @@ Attribute Attribute::getWithMemoryEffects(LLVMContext &Context,
   return get(Context, Memory, ME.toIntValue());
 }
 
+Attribute Attribute::getWithZebraProperties(LLVMContext &Context, ZebraProperties ZP) {
+  return get(Context, Zebra, ZP.toIntValue());
+}
+
 Attribute
 Attribute::getWithAllocSizeArgs(LLVMContext &Context, unsigned ElemSizeArg,
                                 const std::optional<unsigned> &NumElemsArg) {
@@ -396,6 +401,12 @@ MemoryEffects Attribute::getMemoryEffects() const {
   return MemoryEffects::createFromIntValue(pImpl->getValueAsInt());
 }
 
+ZebraProperties Attribute::getZebraProperties() const {
+  assert(hasAttribute(Attribute::Zebra) &&
+         "Can only call getZebraProperties() on zebra attribute");
+  return ZebraProperties::createFromIntValue(pImpl->getValueAsInt());
+}
+
 static const char *getModRefStr(ModRefInfo MR) {
   switch (MR) {
   case ModRefInfo::NoModRef:
@@ -538,6 +549,21 @@ std::string Attribute::getAsString(bool InAttrGrp) const {
       }
       OS << getModRefStr(MR);
     }
+    OS << ")";
+    OS.flush();
+    return Result;
+  }
+
+  if (hasAttribute(Attribute::Zebra)) {
+    std::string Result;
+    raw_string_ostream OS(Result);
+
+    OS << "zebra(";
+
+    ZebraProperties ZP = getZebraProperties();
+
+    OS << ZebraProperties::getStateString(ZP.getState());
+
     OS << ")";
     OS.flush();
     return Result;
@@ -840,6 +866,10 @@ MemoryEffects AttributeSet::getMemoryEffects() const {
   return SetNode ? SetNode->getMemoryEffects() : MemoryEffects::unknown();
 }
 
+std::optional<ZebraProperties> AttributeSet::getZebraProperties() const {
+  return SetNode ? SetNode->getZebraProperties() : std::nullopt;
+}
+
 std::string AttributeSet::getAsString(bool InAttrGrp) const {
   return SetNode ? SetNode->getAsString(InAttrGrp) : "";
 }
@@ -1022,6 +1052,12 @@ MemoryEffects AttributeSetNode::getMemoryEffects() const {
   if (auto A = findEnumAttribute(Attribute::Memory))
     return A->getMemoryEffects();
   return MemoryEffects::unknown();
+}
+
+std::optional<ZebraProperties> AttributeSetNode::getZebraProperties() const {
+  if (auto A = findEnumAttribute(Attribute::Zebra))
+    return A->getZebraProperties();
+  return std::nullopt;
 }
 
 std::string AttributeSetNode::getAsString(bool InAttrGrp) const {
@@ -1572,6 +1608,10 @@ MemoryEffects AttributeList::getMemoryEffects() const {
   return getFnAttrs().getMemoryEffects();
 }
 
+std::optional<ZebraProperties> AttributeList::getZebraProperties() const {
+  return getFnAttrs().getZebraProperties();
+}
+
 std::string AttributeList::getAsString(unsigned Index, bool InAttrGrp) const {
   return getAttributes(Index).getAsString(InAttrGrp);
 }
@@ -1801,6 +1841,10 @@ AttrBuilder &AttrBuilder::addUWTableAttr(UWTableKind Kind) {
 
 AttrBuilder &AttrBuilder::addMemoryAttr(MemoryEffects ME) {
   return addRawIntAttr(Attribute::Memory, ME.toIntValue());
+}
+
+AttrBuilder &AttrBuilder::addZebraAttr(ZebraProperties ZP) {
+  return addRawIntAttr(Attribute::Zebra, ZP.toIntValue());
 }
 
 AttrBuilder &AttrBuilder::addAllocKindAttr(AllocFnKind Kind) {

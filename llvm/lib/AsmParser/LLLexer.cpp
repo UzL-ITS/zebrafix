@@ -653,6 +653,14 @@ lltok::Kind LLLexer::LexIdentifier() {
   KEYWORD(inaccessiblememonly);
   KEYWORD(inaccessiblemem_or_argmemonly);
 
+  // zebra attribute
+  KEYWORD(marked);
+  KEYWORD(original);
+  KEYWORD(copy);
+  KEYWORD(copyrewritten);
+  KEYWORD(extern);
+  KEYWORD(autocopy);
+
   KEYWORD(type);
   KEYWORD(opaque);
 

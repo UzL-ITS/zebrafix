@@ -11741,6 +11741,9 @@ bool ASTContext::DeclMustBeEmitted(const Decl *D) {
     if (FD->hasAttr<ConstructorAttr>() || FD->hasAttr<DestructorAttr>())
       return true;
 
+    if(FD->hasAttr<ZebraAttr>())
+      return true;
+
     // The key function for a class is required.  This rule only comes
     // into play when inline functions can be key functions, though.
     if (getTargetInfo().getCXXABI().canKeyFunctionBeInline()) {

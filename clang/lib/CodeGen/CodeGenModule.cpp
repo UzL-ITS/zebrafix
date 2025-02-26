@@ -69,6 +69,7 @@
 #include "llvm/Support/TimeProfiler.h"
 #include "llvm/Support/X86TargetParser.h"
 #include "llvm/Support/xxhash.h"
+#include "llvm/Support/ZebraProperties.h"
 #include <optional>
 
 using namespace clang;
@@ -2021,6 +2022,38 @@ void CodeGenModule::SetLLVMFunctionAttributesForDefinition(const Decl *D,
     B.addAttribute(llvm::Attribute::StackProtectStrong);
   else if (LangOpts.getStackProtector() == LangOptions::SSPReq)
     B.addAttribute(llvm::Attribute::StackProtectReq);
+
+  if(D && D->hasAttr<ZebraAttr>())
+  {
+    llvm::ZebraProperties::State ZebraState = llvm::ZebraProperties::Marked;
+    switch(D->getAttr<ZebraAttr>()->getState()) {
+    case ZebraAttr::Marked:
+      ZebraState = llvm::ZebraProperties::Marked;
+      break;
+    case ZebraAttr::Original:
+      ZebraState = llvm::ZebraProperties::Original;
+      break;
+    case ZebraAttr::Copy:
+      ZebraState = llvm::ZebraProperties::Copy;
+      break;
+    case ZebraAttr::CopyRewritten:
+      ZebraState = llvm::ZebraProperties::CopyRewritten;
+      break;
+    case ZebraAttr::Extern:
+      ZebraState = llvm::ZebraProperties::Extern;
+      break;
+    case ZebraAttr::AutoCopy:
+       ZebraState = llvm::ZebraProperties::AutoCopy;
+       break;
+    }
+    B.addZebraAttr(llvm::ZebraProperties(ZebraState));
+
+    // We disable inlining of protected functions
+    B.addAttribute(llvm::Attribute::NoInline);
+
+    // Hack for disabling auto-vectorization
+    B.addAttribute(llvm::Attribute::NoImplicitFloat);
+  }
 
   if (!D) {
     // If we don't have a declaration to control inlining, the function isn't

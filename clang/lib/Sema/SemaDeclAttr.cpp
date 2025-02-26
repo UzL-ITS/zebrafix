@@ -8465,6 +8465,25 @@ static void handleCFGuardAttr(Sema &S, Decl *D, const ParsedAttr &AL) {
   D->addAttr(::new (S.Context) CFGuardAttr(S.Context, AL, Arg));
 }
 
+static void handleZebraAttr(Sema &S, Decl *D, const ParsedAttr &AL) {
+  // Check that the state argument is a string literal
+  StringRef StateStr;
+  SourceLocation LiteralLoc;
+
+  if (AL.getNumArgs() == 0)
+    StateStr = "";
+  else if (!S.checkStringLiteralArgumentAttr(AL, 0, StateStr, &LiteralLoc))
+    return;
+
+  ZebraAttr::State State;
+  if (!ZebraAttr::ConvertStrToState(StateStr, State)) {
+    S.Diag(LiteralLoc, diag::warn_attribute_type_not_supported)
+        << AL << StateStr;
+    return;
+  }
+
+  D->addAttr(ZebraAttr::Create(S.Context, State, AL));
+}
 
 template <typename AttrTy>
 static const AttrTy *findEnforceTCBAttrByName(Decl *D, StringRef Name) {
@@ -9167,6 +9186,10 @@ ProcessDeclAttribute(Sema &S, Scope *scope, Decl *D, const ParsedAttr &AL,
     break;
   case ParsedAttr::AT_CFGuard:
     handleCFGuardAttr(S, D, AL);
+    break;
+
+  case ParsedAttr::AT_Zebra:
+    handleZebraAttr(S, D, AL);
     break;
 
   // Thread safety attributes:

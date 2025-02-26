@@ -45,6 +45,7 @@ class LLVMContext;
 class MemoryEffects;
 class Type;
 class raw_ostream;
+class ZebraProperties;
 
 enum class AllocFnKind : uint64_t {
   Unknown = 0,
@@ -148,6 +149,7 @@ public:
   static Attribute getWithInAllocaType(LLVMContext &Context, Type *Ty);
   static Attribute getWithUWTableKind(LLVMContext &Context, UWTableKind Kind);
   static Attribute getWithMemoryEffects(LLVMContext &Context, MemoryEffects ME);
+  static Attribute getWithZebraProperties(LLVMContext &Context, ZebraProperties ZP);
 
   /// For a typed attribute, return the equivalent attribute with the type
   /// changed to \p ReplacementTy.
@@ -248,6 +250,9 @@ public:
 
   /// Returns memory effects.
   MemoryEffects getMemoryEffects() const;
+
+  /// Returns Zebra properties of the function.
+  ZebraProperties getZebraProperties() const;
 
   /// The Attribute is converted to a string of equivalent mnemonic. This
   /// is, presumably, for writing out the mnemonics for the assembly writer.
@@ -383,6 +388,7 @@ public:
   UWTableKind getUWTableKind() const;
   AllocFnKind getAllocKind() const;
   MemoryEffects getMemoryEffects() const;
+  std::optional<ZebraProperties> getZebraProperties() const;
   std::string getAsString(bool InAttrGrp = false) const;
 
   /// Return true if this attribute set belongs to the LLVMContext.
@@ -885,6 +891,9 @@ public:
   /// Returns memory effects of the function.
   MemoryEffects getMemoryEffects() const;
 
+  /// Returns Zebra properties of the function.
+  std::optional<ZebraProperties> getZebraProperties() const;
+
   /// Return the attributes at the index as a string.
   std::string getAsString(unsigned Index, bool InAttrGrp = false) const;
 
@@ -1235,6 +1244,9 @@ public:
 
   /// Add memory effect attribute.
   AttrBuilder &addMemoryAttr(MemoryEffects ME);
+
+  /// Add Zebra properties attribute.
+  AttrBuilder &addZebraAttr(ZebraProperties ZP);
 
   ArrayRef<Attribute> attrs() const { return Attrs; }
 

@@ -39,6 +39,7 @@
 #include "llvm/IR/IntrinsicInst.h"
 #include "llvm/IR/Intrinsics.h"
 #include "llvm/IR/Type.h"
+#include "llvm/Support/ZebraProperties.h"
 #include "llvm/Transforms/Utils/Local.h"
 #include <optional>
 using namespace clang;
@@ -2182,6 +2183,32 @@ void CodeGenModule::ConstructAttributeList(StringRef Name,
       FuncAttrs.addAttribute(llvm::Attribute::NoDuplicate);
     if (TargetDecl->hasAttr<ConvergentAttr>())
       FuncAttrs.addAttribute(llvm::Attribute::Convergent);
+
+    if(TargetDecl->hasAttr<ZebraAttr>())
+    {
+      llvm::ZebraProperties::State ZebraState = llvm::ZebraProperties::Marked;
+      switch(TargetDecl->getAttr<ZebraAttr>()->getState()) {
+      case ZebraAttr::Marked:
+        ZebraState = llvm::ZebraProperties::Marked;
+        break;
+      case ZebraAttr::Original:
+        ZebraState = llvm::ZebraProperties::Original;
+        break;
+      case ZebraAttr::Copy:
+        ZebraState = llvm::ZebraProperties::Copy;
+        break;
+      case ZebraAttr::CopyRewritten:
+        ZebraState = llvm::ZebraProperties::CopyRewritten;
+        break;
+      case ZebraAttr::Extern:
+        ZebraState = llvm::ZebraProperties::Extern;
+        break;
+      case ZebraAttr::AutoCopy:
+        ZebraState = llvm::ZebraProperties::AutoCopy;
+        break;
+      }
+      FuncAttrs.addZebraAttr(llvm::ZebraProperties(ZebraState));
+    }
 
     if (const FunctionDecl *Fn = dyn_cast<FunctionDecl>(TargetDecl)) {
       AddAttributesFromFunctionProtoType(

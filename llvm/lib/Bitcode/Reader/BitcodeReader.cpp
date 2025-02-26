@@ -72,6 +72,7 @@
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/ModRef.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/Support/ZebraProperties.h"
 #include <algorithm>
 #include <cassert>
 #include <cstddef>
@@ -2066,6 +2067,8 @@ static Attribute::AttrKind getAttrFromCode(uint64_t Code) {
     return Attribute::Hot;
   case bitc::ATTR_KIND_PRESPLIT_COROUTINE:
     return Attribute::PresplitCoroutine;
+  case bitc::ATTR_KIND_ZEBRA:
+    return Attribute::Zebra;
   }
 }
 
@@ -2205,6 +2208,8 @@ Error BitcodeReader::parseAttributeGroupBlock() {
             B.addAllocKindAttr(static_cast<AllocFnKind>(Record[++i]));
           else if (Kind == Attribute::Memory)
             B.addMemoryAttr(MemoryEffects::createFromIntValue(Record[++i]));
+          else if (Kind == Attribute::Zebra)
+            B.addZebraAttr(ZebraProperties::createFromIntValue(Record[++i]));
         } else if (Record[i] == 3 || Record[i] == 4) { // String attribute
           bool HasValue = (Record[i++] == 4);
           SmallString<64> KindStr;

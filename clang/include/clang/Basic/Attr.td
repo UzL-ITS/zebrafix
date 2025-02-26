@@ -4127,3 +4127,14 @@ def ReadOnlyPlacement : InheritableAttr {
   let Subjects = SubjectList<[Record]>;
   let Documentation = [ReadOnlyPlacementDocs];
 }
+
+def Zebra : InheritableAttr {
+  let Spellings = [Clang<"zebra">];
+  let Args = [EnumArgument<"State", "State",
+    ["", "original", "copy", "copyrewritten", "extern", "autocopy"],
+    ["Marked", "Original", "Copy", "CopyRewritten", "Extern", "AutoCopy"],
+    1
+  >];
+  let Subjects = SubjectList<[Function]>;
+  let Documentation = [ZebraDocs];
+}

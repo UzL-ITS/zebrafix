@@ -46,6 +46,7 @@
 #include "llvm/Support/ModRef.h"
 #include "llvm/Support/SaveAndRestore.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/Support/ZebraProperties.h"
 #include <algorithm>
 #include <cassert>
 #include <cstring>
@@ -1468,6 +1469,14 @@ bool LLParser::parseEnumAttribute(Attribute::AttrKind Attr, AttrBuilder &B,
     B.addMemoryAttr(*ME);
     return false;
   }
+  case Attribute::Zebra: {
+    std::optional<ZebraProperties> ZP = parseZebraAttr();
+    if(!ZP)
+      return true;
+    B.addZebraAttr(*ZP);
+    return false;
+  }
+
   default:
     B.addAttribute(Attr);
     Lex.Lex();
@@ -1550,6 +1559,7 @@ bool LLParser::parseFnAttributeValuePairs(AttrBuilder &B,
     if (Attr == Attribute::None) {
       if (!InAttrGrp)
         break;
+      dbgs() << "token = " << Token << "\n";
       return error(Lex.getLoc(), "unterminated attribute group");
     }
 
@@ -2280,6 +2290,25 @@ static std::optional<ModRefInfo> keywordToModRef(lltok::Kind Tok) {
   }
 }
 
+static std::optional<ZebraProperties::State> keywordToZebraState(lltok::Kind Tok) {
+  switch (Tok) {
+  case lltok::kw_marked:
+    return ZebraProperties::State::Marked;
+  case lltok::kw_original:
+    return ZebraProperties::State::Original;
+  case lltok::kw_copy:
+    return ZebraProperties::State::Copy;
+  case lltok::kw_copyrewritten:
+    return ZebraProperties::State::CopyRewritten;
+  case lltok::kw_extern:
+    return ZebraProperties::State::Extern;
+  case lltok::kw_autocopy:
+    return ZebraProperties::State::AutoCopy;
+  default:
+    return std::nullopt;
+  }
+}
+
 std::optional<MemoryEffects> LLParser::parseMemoryAttr() {
   MemoryEffects ME = MemoryEffects::none();
 
@@ -2333,6 +2362,28 @@ std::optional<MemoryEffects> LLParser::parseMemoryAttr() {
 
   tokError("unterminated memory attribute");
   return std::nullopt;
+}
+
+std::optional<ZebraProperties> LLParser::parseZebraAttr() {
+  Lex.Lex();
+  if (!EatIfPresent(lltok::lparen)) {
+    tokError("expected '('");
+    return std::nullopt;
+  }
+
+  std::optional<ZebraProperties::State> State = keywordToZebraState(Lex.getKind());
+  if (!State) {
+    tokError("expected Zebra state (marked, original, copy, extern)");
+    return std::nullopt;
+  }
+
+  Lex.Lex();
+  if(!EatIfPresent(lltok::rparen)) {
+    tokError("expected ')'");
+    return std::nullopt;
+  }
+
+  return ZebraProperties(*State);
 }
 
 /// parseOptionalCommaAlign
