@@ -29,6 +29,7 @@
 #include "llvm/IR/Metadata.h"
 #include "llvm/IR/ProfileSummary.h"
 #include "llvm/IR/SymbolTableListTraits.h"
+#include "llvm/Transforms/Instrumentation/ZebraTypeGenerator.h"
 #include "llvm/Support/CBindingWrapping.h"
 #include "llvm/Support/CodeGen.h"
 #include <cstddef>
@@ -50,6 +51,7 @@ class ModuleSummaryIndex;
 class RandomNumberGenerator;
 class StructType;
 class VersionTuple;
+class ZebraTypeGenerator;
 
 /// A Module instance is used to store all the information related to an
 /// LLVM module. Modules are the top level container of all other LLVM
@@ -206,6 +208,8 @@ private:
                              ///< based on unnamed types. The combination of
                              ///< ID and FunctionType maps to the extension that
                              ///< is used to make the intrinsic name unique.
+  ZebraTypeGenerator ZebraGenerator; ///<Generator for all zebra types in the module
+  bool HasZebraGenerator;
 
   friend class Constant;
 
@@ -257,6 +261,10 @@ public:
   /// @returns a string containing the target triple.
   const std::string &getTargetTriple() const { return TargetTriple; }
 
+  /// Get the zebra type generator for all needed zebra types in the module.
+  const ZebraTypeGenerator &getZebraGenerator() const { return ZebraGenerator; }
+  bool &hasZebraGenerator() { return HasZebraGenerator; }
+
   /// Get the global data context.
   /// @returns LLVMContext - a container for LLVM's global information
   LLVMContext &getContext() const { return Context; }
@@ -299,6 +307,10 @@ public:
 
   /// Set the target triple.
   void setTargetTriple(StringRef T) { TargetTriple = std::string(T); }
+
+  /// Set the zebra type generator.
+  void setZebraGenerator() { ZebraGenerator = *new ZebraTypeGenerator(Context); }
+  void setHasZebraGenerator() { HasZebraGenerator = true; }
 
   /// Set the module-scope inline assembly blocks.
   /// A trailing newline is added if the input doesn't have one.
