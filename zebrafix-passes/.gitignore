@@ -1,0 +1,14 @@
+# Nested build directory
+/build*
+/cmake-build-debug*
+
+# CLion project configuration
+/.idea
+
+# Merge files created by git.
+*.orig
+# Reject files created by patch.
+*.rej
+
+# VS2017 and VSCode config files.
+.vscode
